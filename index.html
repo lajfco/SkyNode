@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Mobile Map App</title>
+    
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#136aec">
+    
+    <link rel="manifest" href="manifest.json">
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            overflow: hidden;
+            background-color: #f4f4f4;
+        }
+        #map {
+            height: 100%;
+            width: 100%;
+        }
+        /* Mobile UI Status Indicator */
+        #status-pill {
+            position: absolute;
+            top: env(safe-area-inset-top, 16px); /* Keeps it clear of iPhone notches */
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 8px 16px;
+            border-radius: 30px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+            pointer-events: none;
+            transition: all 0.3s ease;
+        }
+        /* Locate Me Floating Action Button (FAB) */
+        #locate-fab {
+            position: absolute;
+            bottom: calc(env(safe-area-inset-bottom, 16px) + 16px);
+            right: 16px;
+            z-index: 1000;
+            background: #136aec;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 56px;
+            height: 56px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            font-size: 24px;
+            line-height: 56px;
+            text-align: center;
+            cursor: pointer;
+        }
+        #locate-fab:active {
+            background: #0b55c4;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="status-pill">Acquiring Location...</div>
+    <button id="locate-fab" onclick="recenterMap()">⌖</button>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const map = L.map('map', {
+            zoomControl: false // Hide default zoom buttons for a cleaner mobile UI
+        }).setView([0, 0], 2);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OSM'
+        }).addTo(map);
+
+        let userMarker = null;
+        let accuracyCircle = null;
+        let currentCoords = null;
+        const statusPill = document.getElementById('status-pill');
+
+        function success(position) {
+            const lat = position.coords.latitude;
+            const lng = position.coords.longitude;
+            const accuracy = position.coords.accuracy;
+            currentCoords = [lat, lng];
+
+            statusPill.style.opacity = '0'; // Hide when location is found
+
+            if (userMarker) {
+                userMarker.setLatLng(currentCoords);
+                accuracyCircle.setLatLng(currentCoords);
+                accuracyCircle.setRadius(accuracy);
+            } else {
+                userMarker = L.marker(currentCoords).addTo(map);
+                accuracyCircle = L.circle(currentCoords, {
+                    radius: accuracy,
+                    color: '#136aec',
+                    fillColor: '#136aec',
+                    fillOpacity: 0.15
+                }).addTo(map);
+                
+                // Initial snap to user location
+                recenterMap();
+            }
+        }
+
+        function error(err) {
+            statusPill.style.opacity = '1';
+            statusPill.style.background = "#ff3b30";
+            statusPill.style.color = "white";
+            statusPill.innerText = "Location access denied or unavailable.";
+        }
+
+        function recenterMap() {
+            if (currentCoords) {
+                map.setView(currentCoords, 16);
+            }
+        }
+
+        if ('geolocation' in navigator) {
+            navigator.geolocation.watchPosition(success, error, {
+                enableHighAccuracy: true,
+                maximumAge: 0
+            });
+        } else {
+            statusPill.innerText = "Unsupported device.";
+        }
+
+        // Register Service Worker for PWA compliance
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js').catch(err => console.log(err));
+        }
+    </script>
+</body>
+</html>
