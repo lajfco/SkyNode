@@ -10,7 +10,6 @@
     <meta name="theme-color" content="#136aec">
     
     <link rel="manifest" href="manifest.json">
-
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     
     <style>
@@ -29,10 +28,9 @@
             width: 100%;
         }
         
-        /* Mobile UI Status Floating Pill */
         #status-pill {
             position: absolute;
-            top: env(safe-area-inset-top, 16px); /* Safely clears iPhone notches and device camera cutouts */
+            top: env(safe-area-inset-top, 16px);
             left: 50%;
             transform: translateX(-50%);
             z-index: 1000;
@@ -47,11 +45,25 @@
             transition: opacity 0.3s ease, background 0.3s ease;
             white-space: nowrap;
         }
+
+        /* NEW: Network Sync Status Indicator Dot */
+        #network-dot {
+            position: absolute;
+            top: calc(env(safe-area-inset-top, 16px) + 8px);
+            right: 16px;
+            z-index: 1000;
+            width: 14px;
+            height: 14px;
+            background-color: #a1a1a6; /* Initial Gray */
+            border-radius: 50%;
+            border: 2px solid white;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            transition: background-color 0.4s ease;
+        }
         
-        /* Locate Me Floating Action Button (FAB) */
         #locate-fab {
             position: absolute;
-            bottom: calc(env(safe-area-inset-bottom, 16px) + 16px); /* Keeps clear of home indicators */
+            bottom: calc(env(safe-area-inset-bottom, 16px) + 16px);
             right: 16px;
             z-index: 1000;
             background: #136aec;
@@ -76,6 +88,7 @@
 <body>
 
     <div id="status-pill">Acquiring Location...</div>
+    <div id="network-dot" title="Server Sync Status"></div>
     <button id="locate-fab" onclick="recenterMap()">⌖</button>
     
     <div id="map"></div>
@@ -83,38 +96,28 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
         // ==========================================
-        // 1. CONFIGURATION & APP CONSTANTS
+        // CONFIGURATION
         // ==========================================
-        const POST_RATE_MS = 5000; // Interval rate to send data to server (5000ms = 5 seconds)
+        const POST_RATE_MS = 5000; 
         const SERVER_URL = 'https://skynode.gt.tc/log_location.php'; 
 
-        // ==========================================
-        // 2. INITIALIZE LEAFLET MAP OBJECT
-        // ==========================================
-        // Zoom buttons hidden for an uncluttered native interface layout
-        const map = L.map('map', {
-            zoomControl: false 
-        }).setView([0, 0], 2);
+        const map = L.map('map', { zoomControl: false }).setView([0, 0], 2);
 
-        // Render OpenStreetMap default Map Tiles
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
             attribution: '© OSM'
         }).addTo(map);
 
-        // Core tracking state containers
         let userMarker = null;
         let accuracyCircle = null;
         let currentCoords = null; 
         const statusPill = document.getElementById('status-pill');
+        const networkDot = document.getElementById('network-dot'); // DOM Reference
 
-        // ==========================================
-        // 3. GEOLOCATION SENSOR WATCH LOGIC
-        // ==========================================
         const geoOptions = {
-            enableHighAccuracy: true, // Demands true GPS tracking over cellular/Wi-Fi estimation
-            timeout: 15000,           // Time threshold to capture signal before firing an error
-            maximumAge: 0             // Discards cached positions to guarantee real-time coordinates
+            enableHighAccuracy: true,
+            timeout: 15000,
+            maximumAge: 0
         };
 
         function onLocationSuccess(position) {
@@ -122,30 +125,26 @@
             const lng = position.coords.longitude;
             const accuracy = position.coords.accuracy;
 
-            // Shape standard data structure payload for server logging
             currentCoords = {
-                lat: Number(lat.toFixed(6)), // Restricts spatial footprint size to ~11cm resolution precision
+                lat: Number(lat.toFixed(6)),
                 lng: Number(lng.toFixed(6)),
                 alt: position.coords.altitude ? Number(position.coords.altitude.toFixed(1)) : 0,
                 speed: position.coords.speed ? Number(position.coords.speed.toFixed(1)) : 0,
                 timestamp: new Date().toISOString()
             };
 
-            // Hide the status banner quietly once data arrives smoothly
             if (statusPill.style.opacity !== '0') {
                 statusPill.style.opacity = '0';
             }
 
             const latlng = [lat, lng];
 
-            // Re-render visual elements or generate them fresh during structural startup
             if (userMarker) {
                 userMarker.setLatLng(latlng);
                 accuracyCircle.setLatLng(latlng);
                 accuracyCircle.setRadius(accuracy);
             } else {
                 userMarker = L.marker(latlng).addTo(map);
-                
                 accuracyCircle = L.circle(latlng, {
                     radius: accuracy,
                     color: '#136aec',
@@ -153,26 +152,15 @@
                     fillOpacity: 0.12,
                     weight: 1
                 }).addTo(map);
-                
-                // Perform a sharp focus adjustment snap on initial pinpoint catch
                 recenterMap();
             }
         }
 
         function onLocationError(err) {
-            console.error(`Sensor error state (${err.code}): ${err.message}`);
-            
             statusPill.style.opacity = '1';
             statusPill.style.background = "#ff3b30"; 
             statusPill.style.color = "white";
-
-            if (err.code === 1) {
-                statusPill.innerText = "Location access blocked by browser privacy settings.";
-            } else if (err.code === 2) {
-                statusPill.innerText = "GPS hardware searching for line-of-sight satellite fix...";
-            } else {
-                statusPill.innerText = "Connection timeout acquiring hardware telemetry.";
-            }
+            statusPill.innerText = "GPS Signal Lost.";
         }
 
         function recenterMap() {
@@ -181,19 +169,14 @@
             }
         }
 
-        // Initialize spatial observation listeners
         if ('geolocation' in navigator) {
             navigator.geolocation.watchPosition(onLocationSuccess, onLocationError, geoOptions);
-        } else {
-            statusPill.style.opacity = '1';
-            statusPill.innerText = "Device failure: Hardware layer lacks coordinate translation.";
         }
 
         // ==========================================
-        // 4. PERIODIC DATA TRANSMISSION (NETWORK)
+        // UPDATED TRANSMISSION LOGIC WITH UI FEEDBACK
         // ==========================================
         async function postLocationToServer() {
-            // Exit silently if the sensor engine hasn't received a secure GPS hardware handshake yet
             if (!currentCoords) return; 
 
             try {
@@ -206,24 +189,26 @@
                     body: JSON.stringify(currentCoords)
                 });
 
-                if (!response.ok) {
-                    console.warn(`Server handshake rejected. Processing Code: ${response.status}`);
+                if (response.ok) {
+                    // Turn dot Green on successful HTTP 200-299 responses
+                    networkDot.style.backgroundColor = '#34c759'; 
+                } else {
+                    // Turn dot Red if server responds with an error status code
+                    networkDot.style.backgroundColor = '#ff3b30';
+                    console.warn(`Server Error: ${response.status}`);
                 }
             } catch (networkError) {
-                console.error("Transmission interface failed (offline context or bad endpoint):", networkError);
+                // Turn dot Red if server is unreachable, offline, or CORS fails
+                networkDot.style.backgroundColor = '#ff3b30';
+                console.error("Network error:", networkError);
             }
         }
 
-        // Initialize runtime reporting sequence clock
         setInterval(postLocationToServer, POST_RATE_MS);
 
-        // ==========================================
-        // 5. PROGRESSIVE WEB APP (PWA) REGISTRATION
-        // ==========================================
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js')
-                    .catch(err => console.error("PWA Initialization error:", err));
+                navigator.serviceWorker.register('sw.js').catch(() => {});
             });
         }
     </script>
