@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Mobile Map App</title>
+    <title>Mobile Track App</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -23,14 +23,16 @@
             overflow: hidden;
             background-color: #f4f4f4;
         }
+        
         #map {
             height: 100%;
             width: 100%;
         }
-        /* Mobile UI Status Indicator */
+        
+        /* Mobile UI Status Floating Pill */
         #status-pill {
             position: absolute;
-            top: env(safe-area-inset-top, 16px); /* Keeps it clear of iPhone notches */
+            top: env(safe-area-inset-top, 16px); /* Safely clears iPhone notches and device camera cutouts */
             left: 50%;
             transform: translateX(-50%);
             z-index: 1000;
@@ -42,12 +44,14 @@
             font-weight: 500;
             color: #333;
             pointer-events: none;
-            transition: all 0.3s ease;
+            transition: opacity 0.3s ease, background 0.3s ease;
+            white-space: nowrap;
         }
+        
         /* Locate Me Floating Action Button (FAB) */
         #locate-fab {
             position: absolute;
-            bottom: calc(env(safe-area-inset-bottom, 16px) + 16px);
+            bottom: calc(env(safe-area-inset-bottom, 16px) + 16px); /* Keeps clear of home indicators */
             right: 16px;
             z-index: 1000;
             background: #136aec;
@@ -61,7 +65,9 @@
             line-height: 56px;
             text-align: center;
             cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
         }
+        
         #locate-fab:active {
             background: #0b55c4;
         }
@@ -71,75 +77,154 @@
 
     <div id="status-pill">Acquiring Location...</div>
     <button id="locate-fab" onclick="recenterMap()">⌖</button>
+    
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
+        // ==========================================
+        // 1. CONFIGURATION & APP CONSTANTS
+        // ==========================================
+        const POST_RATE_MS = 5000; // Interval rate to send data to server (5000ms = 5 seconds)
+        const SERVER_URL = 'https://your-free-server-domain.com/log_location.php'; 
+
+        // ==========================================
+        // 2. INITIALIZE LEAFLET MAP OBJECT
+        // ==========================================
+        // Zoom buttons hidden for an uncluttered native interface layout
         const map = L.map('map', {
-            zoomControl: false // Hide default zoom buttons for a cleaner mobile UI
+            zoomControl: false 
         }).setView([0, 0], 2);
 
+        // Render OpenStreetMap default Map Tiles
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
             attribution: '© OSM'
         }).addTo(map);
 
+        // Core tracking state containers
         let userMarker = null;
         let accuracyCircle = null;
-        let currentCoords = null;
+        let currentCoords = null; 
         const statusPill = document.getElementById('status-pill');
 
-        function success(position) {
+        // ==========================================
+        // 3. GEOLOCATION SENSOR WATCH LOGIC
+        // ==========================================
+        const geoOptions = {
+            enableHighAccuracy: true, // Demands true GPS tracking over cellular/Wi-Fi estimation
+            timeout: 15000,           // Time threshold to capture signal before firing an error
+            maximumAge: 0             // Discards cached positions to guarantee real-time coordinates
+        };
+
+        function onLocationSuccess(position) {
             const lat = position.coords.latitude;
             const lng = position.coords.longitude;
             const accuracy = position.coords.accuracy;
-            currentCoords = [lat, lng];
 
-            statusPill.style.opacity = '0'; // Hide when location is found
+            // Shape standard data structure payload for server logging
+            currentCoords = {
+                lat: Number(lat.toFixed(6)), // Restricts spatial footprint size to ~11cm resolution precision
+                lng: Number(lng.toFixed(6)),
+                alt: position.coords.altitude ? Number(position.coords.altitude.toFixed(1)) : 0,
+                speed: position.coords.speed ? Number(position.coords.speed.toFixed(1)) : 0,
+                timestamp: new Date().toISOString()
+            };
 
+            // Hide the status banner quietly once data arrives smoothly
+            if (statusPill.style.opacity !== '0') {
+                statusPill.style.opacity = '0';
+            }
+
+            const latlng = [lat, lng];
+
+            // Re-render visual elements or generate them fresh during structural startup
             if (userMarker) {
-                userMarker.setLatLng(currentCoords);
-                accuracyCircle.setLatLng(currentCoords);
+                userMarker.setLatLng(latlng);
+                accuracyCircle.setLatLng(latlng);
                 accuracyCircle.setRadius(accuracy);
             } else {
-                userMarker = L.marker(currentCoords).addTo(map);
-                accuracyCircle = L.circle(currentCoords, {
+                userMarker = L.marker(latlng).addTo(map);
+                
+                accuracyCircle = L.circle(latlng, {
                     radius: accuracy,
                     color: '#136aec',
                     fillColor: '#136aec',
-                    fillOpacity: 0.15
+                    fillOpacity: 0.12,
+                    weight: 1
                 }).addTo(map);
                 
-                // Initial snap to user location
+                // Perform a sharp focus adjustment snap on initial pinpoint catch
                 recenterMap();
             }
         }
 
-        function error(err) {
+        function onLocationError(err) {
+            console.error(`Sensor error state (${err.code}): ${err.message}`);
+            
             statusPill.style.opacity = '1';
-            statusPill.style.background = "#ff3b30";
+            statusPill.style.background = "#ff3b30"; 
             statusPill.style.color = "white";
-            statusPill.innerText = "Location access denied or unavailable.";
+
+            if (err.code === 1) {
+                statusPill.innerText = "Location access blocked by browser privacy settings.";
+            } else if (err.code === 2) {
+                statusPill.innerText = "GPS hardware searching for line-of-sight satellite fix...";
+            } else {
+                statusPill.innerText = "Connection timeout acquiring hardware telemetry.";
+            }
         }
 
         function recenterMap() {
             if (currentCoords) {
-                map.setView(currentCoords, 16);
+                map.setView([currentCoords.lat, currentCoords.lng], 16);
             }
         }
 
+        // Initialize spatial observation listeners
         if ('geolocation' in navigator) {
-            navigator.geolocation.watchPosition(success, error, {
-                enableHighAccuracy: true,
-                maximumAge: 0
-            });
+            navigator.geolocation.watchPosition(onLocationSuccess, onLocationError, geoOptions);
         } else {
-            statusPill.innerText = "Unsupported device.";
+            statusPill.style.opacity = '1';
+            statusPill.innerText = "Device failure: Hardware layer lacks coordinate translation.";
         }
 
-        // Register Service Worker for PWA compliance
+        // ==========================================
+        // 4. PERIODIC DATA TRANSMISSION (NETWORK)
+        // ==========================================
+        async function postLocationToServer() {
+            // Exit silently if the sensor engine hasn't received a secure GPS hardware handshake yet
+            if (!currentCoords) return; 
+
+            try {
+                const response = await fetch(SERVER_URL, {
+                    method: 'POST',
+                    mode: 'cors',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(currentCoords)
+                });
+
+                if (!response.ok) {
+                    console.warn(`Server handshake rejected. Processing Code: ${response.status}`);
+                }
+            } catch (networkError) {
+                console.error("Transmission interface failed (offline context or bad endpoint):", networkError);
+            }
+        }
+
+        // Initialize runtime reporting sequence clock
+        setInterval(postLocationToServer, POST_RATE_MS);
+
+        // ==========================================
+        // 5. PROGRESSIVE WEB APP (PWA) REGISTRATION
+        // ==========================================
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('sw.js').catch(err => console.log(err));
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js')
+                    .catch(err => console.error("PWA Initialization error:", err));
+            });
         }
     </script>
 </body>
